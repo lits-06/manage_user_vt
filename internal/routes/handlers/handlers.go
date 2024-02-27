@@ -19,9 +19,6 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-var userCollection = mongodb.Database.Collection(os.Getenv("MONGO_USER_COLLECTION"))
-var tokenCollection = mongodb.Database.Collection(os.Getenv("MONGO_TOKEN_COLLECTION"))
-
 func Register(c *gin.Context) {
 	var user models.User
 	if err := c.BindJSON(&user); err != nil {
@@ -30,8 +27,8 @@ func Register(c *gin.Context) {
 	}
 
 	filter := bson.M{"email": user.Email}
-	if err := userCollection.FindOne(context.Background(), filter).Err(); err != mongo.ErrNoDocuments {
-		c.JSON(http.StatusOK, gin.H{"message": "Email has been registed"})
+	if err := mongodb.UserCollection.FindOne(context.Background(), filter).Err(); err != mongo.ErrNoDocuments {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Email has been registed"})
 		return
 	}
 
@@ -42,7 +39,7 @@ func Register(c *gin.Context) {
 	}
 	user.Password = string(hashPassword)
 
-	_, err = userCollection.InsertOne(context.Background(), user)
+	_, err = mongodb.UserCollection.InsertOne(context.Background(), user)
 	if err != nil {
         log.Fatal(err)
     }
@@ -57,21 +54,17 @@ func Login(c *gin.Context) {
 		return
 	}
 
+	var existUser models.User
 	filter := bson.M{"email": user.Email}
-	res := userCollection.FindOne(context.Background(), filter)
-	if res.Err() != nil {
+	if err := mongodb.UserCollection.FindOne(context.Background(), filter).Decode(&existUser); err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "email has not been registered"})
         return
 	}
 
-	hashPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
+	err := bcrypt.CompareHashAndPassword([]byte(existUser.Password), []byte(user.Password))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to hash password"})
-		return
-	}
-	if user.Password != string(hashPassword) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "incorrect password"})
-        return
+		return
 	}
 
 	token := jwt.New(jwt.SigningMethodHS256)
@@ -79,7 +72,8 @@ func Login(c *gin.Context) {
 	claims["email"] = user.Email
 	claims["exp"] = time.Now().Add(time.Hour * 24).Unix()
 
-	tokenString, err := token.SignedString(os.Getenv("SECRETKEY"))
+	secretKey := []byte(os.Getenv("SECRETKEY"))
+	tokenString, err := token.SignedString(secretKey)
 	if err != nil {
         c.JSON(http.StatusInternalServerError, gin.H{"error": "could not create token"})
         return
@@ -90,7 +84,7 @@ func Login(c *gin.Context) {
 		Token: tokenString,
 	}
 
-	_, err = tokenCollection.InsertOne(context.Background(), newToken)
+	_, err = mongodb.TokenCollection.InsertOne(context.Background(), newToken)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -98,7 +92,7 @@ func Login(c *gin.Context) {
 	id := gocql.TimeUUID()
 	info := fmt.Sprintf("%s login at %s", user.Email, time.Now().Format("02-01-2006 15:04:05"))
 	err = scylla.Session.Query(`
-		INSERT INTO history (id, email, info)
+		INSERT INTO info (id, email, info)
 		VALUES (?, ?, ?)`,
 		id, user.Email, info).Exec()
 	if err != nil {
@@ -117,14 +111,14 @@ func Logout(c *gin.Context) {
 	}
 
 	filter := bson.M{"email": user.Email}
-    if _, err := tokenCollection.DeleteMany(context.Background(), filter); err != nil {
+    if _, err := mongodb.TokenCollection.DeleteMany(context.Background(), filter); err != nil {
         log.Fatal(err)
     }
 
 	id := gocql.TimeUUID()
 	info := fmt.Sprintf("%s logout at %s", user.Email, time.Now().Format("02-01-2006 15:04:05"))
 	err := scylla.Session.Query(`
-		INSERT INTO history (id, email, info)
+		INSERT INTO info (id, email, info)
 		VALUES (?, ?, ?)`,
 		id, user.Email, info).Exec()
 	if err != nil {
@@ -133,4 +127,28 @@ func Logout(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Logout success"})
+}
+
+func Showinfo(c *gin.Context) {
+	email := c.Param("email")
+
+	var info string
+	var infoRecord []string
+	query := "SELECT info FROM info WHERE email = ?"
+	iter := scylla.Session.Query(query, email).Iter()
+	defer iter.Close()
+
+	for {
+		if !iter.Scan(&info) {
+			break
+		}
+		infoRecord = append(infoRecord, info)
+	}
+
+	if err := iter.Close(); err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal Server Error"})
+		return
+    }
+
+	c.JSON(http.StatusOK, gin.H{"info": infoRecord})
 }

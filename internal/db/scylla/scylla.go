@@ -1,8 +1,7 @@
 package scylla
 
 import (
-	"fmt"
-	"os"
+	"log"
 
 	"github.com/gocql/gocql"
 )
@@ -10,26 +9,22 @@ import (
 var Session *gocql.Session
 
 func ConnectDB() {
-    var cluster = gocql.NewCluster(os.Getenv("NODE_0"), os.Getenv("NODE_1"), os.Getenv("NODE_2"))
-    cluster.Authenticator = gocql.PasswordAuthenticator{Username: os.Getenv("USERNAME_SCYLLA"), Password: os.Getenv("PASSWORD_SCYLLA")}
-    cluster.PoolConfig.HostSelectionPolicy = gocql.DCAwareRoundRobinPolicy("REGION")
-    cluster.Keyspace = os.Getenv("KEYSPACE_SCYLLA")
+    var cluster = gocql.NewCluster("127.0.0.1")
+    cluster.Keyspace = "history"
 
-    Session, err := cluster.CreateSession()
+    s, err := cluster.CreateSession()
     if err != nil {
-        panic("Failed to connect to cluster")
+        log.Fatal("Failed to connect to cluster")
     }
 
-    defer Session.Close()
-
-    var query = Session.Query("SELECT * FROM system.clients")
-
-    if rows, err := query.Iter().SliceMap(); err == nil {
-        for _, row := range rows {
-            fmt.Printf("%v\n", row)
-        }
-    } else {
-        panic("Query error: " + err.Error())
+    if err := s.Query("CREATE KEYSPACE IF NOT EXISTS history WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}").Exec(); err != nil {
+        log.Fatal("Failed to create keyspace")
     }
+
+    if err := s.Query("CREATE TABLE IF NOT EXISTS info (email TEXT PRIMARY KEY, id UUID, info TEXT)").Exec(); err != nil {
+        log.Fatal("Failed to create table")
+    }
+
+    Session = s
 }
     

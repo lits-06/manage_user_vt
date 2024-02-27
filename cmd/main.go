@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 
 	"github.com/gin-gonic/gin"
@@ -17,7 +18,9 @@ func main() {
 	}
 
 	scylla.ConnectDB()
-	mongodb.ConnectDB()
+	defer scylla.Session.Close()
+	mongoClient := mongodb.ConnectDB()
+	defer mongoClient.Disconnect(context.Background())
 
 	r := gin.Default()
     routes.SetupRoutes(r)
