@@ -20,8 +20,7 @@ func ConnectDB() {
     if err := s.Query("CREATE KEYSPACE IF NOT EXISTS history WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}").Exec(); err != nil {
         log.Fatal("Failed to create keyspace")
     }
-
-    if err := s.Query("CREATE TABLE IF NOT EXISTS info (email TEXT PRIMARY KEY, id UUID, info TEXT)").Exec(); err != nil {
+    if err := s.Query("CREATE TABLE IF NOT EXISTS info (id UUID PRIMARY KEY, email TEXT, info TEXT)").Exec(); err != nil {
         log.Fatal("Failed to create table")
     }
 

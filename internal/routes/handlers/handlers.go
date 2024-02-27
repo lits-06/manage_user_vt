@@ -134,14 +134,11 @@ func Showinfo(c *gin.Context) {
 
 	var info string
 	var infoRecord []string
-	query := "SELECT info FROM info WHERE email = ?"
+	query := "SELECT info FROM info WHERE email = ? ALLOW FILTERING"
 	iter := scylla.Session.Query(query, email).Iter()
 	defer iter.Close()
 
-	for {
-		if !iter.Scan(&info) {
-			break
-		}
+	for iter.Scan(&info) {
 		infoRecord = append(infoRecord, info)
 	}
 
