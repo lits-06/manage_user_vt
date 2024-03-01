@@ -48,6 +48,12 @@ func Register(c *gin.Context) {
 }
 
 func Login(c *gin.Context) {
+	isNewSession, _ := c.Get("isNewSession")
+	if !isNewSession.(bool) {
+		c.JSON(http.StatusOK, gin.H{"message": "you have logged in"})
+		return
+	}
+
 	var user models.User
 	if err := c.BindJSON(&user); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON"})
@@ -70,7 +76,7 @@ func Login(c *gin.Context) {
 	token := jwt.New(jwt.SigningMethodHS256)
 	claims := token.Claims.(jwt.MapClaims)
 	claims["email"] = user.Email
-	claims["exp"] = time.Now().Add(time.Hour * 24).Unix()
+	claims["exp"] = time.Now().Add(time.Minute).Unix()
 
 	secretKey := []byte(os.Getenv("SECRETKEY"))
 	tokenString, err := token.SignedString(secretKey)
@@ -86,8 +92,10 @@ func Login(c *gin.Context) {
 
 	_, err = mongodb.TokenCollection.InsertOne(context.Background(), newToken)
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("%v", err)
 	}
+
+	c.Header("Authorization", fmt.Sprintf("Bearer %s", tokenString))
 
 	id := gocql.TimeUUID()
 	info := fmt.Sprintf("%s login at %s", user.Email, time.Now().Format("02-01-2006 15:04:05"))
@@ -100,27 +108,30 @@ func Login(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Login success"})
+	c.JSON(http.StatusOK, gin.H{"token": tokenString})
 }
 
 func Logout(c *gin.Context) {
-	var user models.User
-	if err := c.BindJSON(&user); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid JSON"})
+	isNewSession, _ := c.Get("isNewSession")
+	if isNewSession.(bool) {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "you did not log in"})
 		return
 	}
 
-	filter := bson.M{"email": user.Email}
+	userEmail, _ := c.Get("userEmail")
+	c.Set("Authorization", "")
+
+	filter := bson.M{"email": userEmail}
     if _, err := mongodb.TokenCollection.DeleteMany(context.Background(), filter); err != nil {
-        log.Fatal(err)
+        log.Printf("%v", err)
     }
 
 	id := gocql.TimeUUID()
-	info := fmt.Sprintf("%s logout at %s", user.Email, time.Now().Format("02-01-2006 15:04:05"))
+	info := fmt.Sprintf("%s logout at %s", userEmail, time.Now().Format("02-01-2006 15:04:05"))
 	err := scylla.Session.Query(`
 		INSERT INTO info (id, email, info)
 		VALUES (?, ?, ?)`,
-		id, user.Email, info).Exec()
+		id, userEmail, info).Exec()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal Server Error"})
 		return
@@ -130,12 +141,18 @@ func Logout(c *gin.Context) {
 }
 
 func Showinfo(c *gin.Context) {
-	email := c.Param("email")
+	isNewSession, _ := c.Get("isNewSession")
+	if isNewSession.(bool) {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "you did not log in"})
+		return
+	}
+
+	userEmail, _ := c.Get("userEmail")
 
 	var info string
 	var infoRecord []string
 	query := "SELECT info FROM info WHERE email = ? ALLOW FILTERING"
-	iter := scylla.Session.Query(query, email).Iter()
+	iter := scylla.Session.Query(query, userEmail).Iter()
 	defer iter.Close()
 
 	for iter.Scan(&info) {
